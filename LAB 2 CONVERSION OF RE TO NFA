@@ -1,65 +1,1069 @@
-# 🧮 Compiler Design Lab Experiments
+#!/usr/bin/env python3
+"""
+================================================================================
+COMPILER DESIGN LAB - EXPERIMENT 2: CONVERSION OF REGULAR EXPRESSION TO NFA
+================================================================================
 
-[![GitHub license](https://img.shields.io/github/license/yourusername/compiler-design-lab)](https://github.com/yourusername/compiler-design-lab/blob/main/LICENSE)
-[![GitHub stars](https://img.shields.io/github/stars/yourusername/compiler-design-lab)](https://github.com/yourusername/compiler-design-lab/stargazers)
-[![GitHub issues](https://img.shields.io/github/issues/yourusername/compiler-design-lab)](https://github.com/yourusername/compiler-design-lab/issues)
+Author: Student Name
+Date: February 2026
+Course: Compiler Design
+Description: Complete implementation of Regular Expression to NFA conversion
+             using Thompson's Construction Algorithm
 
-## 📚 About
-This repository contains comprehensive implementations of all compiler design lab experiments as per the academic curriculum. Each lab experiment demonstrates fundamental concepts of compiler construction through practical code implementations.
+Reference: Alfred V. Aho, Monica S. Lam, Ravi Sethi, Jeffrey D. Ullman
+           "Compilers: Principles, Techniques, and Tools" (2nd Edition)
 
-## 🎯 Lab Experiments
+================================================================================
+"""
 
-| Lab No. | Experiment Name | Status | Implementation |
-|---------|-----------------|--------|----------------|
-| 1 | Implementation of Lexical Analyzer | ✅ Completed | [View](Lab-01_Lexical-Analyzer/) |
-| 2 | Conversion from Regular Expression to NFA | ✅ Completed | [View](Lab-02_Regex-to-NFA/) |
-| 3 | Conversion from NFA to DFA | ✅ Completed | [View](Lab-03_NFA-to-DFA/) |
-| 4 | Elimination of Ambiguity, Left Recursion and Left Factoring | ✅ Completed | [View](Lab-04_Elimination/) |
-| 5 | FIRST AND FOLLOW computation | ✅ Completed | [View](Lab-05_FIRST-FOLLOW/) |
-| 6 | Predictive Parsing Table | ✅ Completed | [View](Lab-06_Predictive-Parsing/) |
-| 7 | Shift Reduce Parsing | ✅ Completed | [View](Lab-07_Shift-Reduce/) |
-| 8 | Computation of LEADING AND TRAILING | ✅ Completed | [View](Lab-08_LEADING-TRAILING/) |
+import graphviz
+from dataclasses import dataclass
+from typing import Dict, List, Set, Tuple, Optional, Union
+import re
+from collections import deque
+import json
 
-## 🛠️ Technologies Used
-- **Programming Language**: Python 3.x / C / C++
-- **Tools**: VS Code, Jupyter Notebook, Graphviz (for automata visualization)
-- **Platform**: Cross-platform (Windows/Linux/MacOS)
+# ==============================================================================
+# DATA STRUCTURES FOR NFA REPRESENTATION
+# ==============================================================================
 
-## 📖 Learning Resources
+@dataclass
+class NFAState:
+    """
+    Represents a single state in the NFA
+    
+    Attributes:
+        id: Unique identifier for the state
+        transitions: Dictionary mapping input symbols to set of destination states
+        is_accept: Boolean indicating if this is an accepting state
+        epsilon_transitions: Set of states reachable via epsilon transitions
+    """
+    id: int
+    transitions: Dict[str, Set['NFAState']]
+    is_accept: bool = False
+    epsilon_transitions: Set['NFAState'] = None
+    
+    def __post_init__(self):
+        if self.epsilon_transitions is None:
+            self.epsilon_transitions = set()
+    
+    def __hash__(self):
+        return hash(self.id)
+    
+    def __eq__(self, other):
+        if not isinstance(other, NFAState):
+            return False
+        return self.id == other.id
+    
+    def __repr__(self):
+        return f"State({self.id})"
 
-### Reference Books
-1. **Alfred V. Aho, Monica S. Lam, Ravi Sethi, Jeffrey D. Ullman** - "Compilers: Principles, Techniques, and Tools" (2nd Edition), Pearson Education
-2. **S. Godfrey Winster, S. Aruna Devi, R. Sujatha, K. Muneeswaran** - "Compiler Design", Oxford University Press
-3. **International Student Edition** - Additional reference materials
 
-### Online Resources
-- [Compiler Design - TutorialsPoint](https://www.tutorialspoint.com/compiler_design/)
-- [NPTEL Compiler Design Course](https://nptel.ac.in/courses/106108113/)
-- [Stanford's Compiler Course Materials](https://web.stanford.edu/class/cs143/)
+class NFA:
+    """
+    Represents a Non-deterministic Finite Automaton
+    
+    Attributes:
+        start_state: The initial state of the NFA
+        accept_states: Set of accepting states
+        states: Set of all states in the NFA
+        alphabet: Set of input symbols
+    """
+    
+    def __init__(self, start_state: NFAState = None, accept_state: NFAState = None):
+        self.start_state = start_state
+        self.accept_states = set()
+        if accept_state:
+            self.accept_states.add(accept_state)
+        self.states = set()
+        self.alphabet = set()
+        self._next_state_id = 0
+    
+    def add_state(self, state: NFAState) -> None:
+        """Add a state to the NFA"""
+        self.states.add(state)
+    
+    def add_transition(self, from_state: NFAState, to_state: NFAState, symbol: str) -> None:
+        """Add a transition between states"""
+        if symbol != 'ε':
+            self.alphabet.add(symbol)
+            if symbol not in from_state.transitions:
+                from_state.transitions[symbol] = set()
+            from_state.transitions[symbol].add(to_state)
+        else:
+            from_state.epsilon_transitions.add(to_state)
+    
+    def add_accept_state(self, state: NFAState) -> None:
+        """Mark a state as accepting"""
+        state.is_accept = True
+        self.accept_states.add(state)
+    
+    def get_next_state_id(self) -> int:
+        """Get next available state ID"""
+        state_id = self._next_state_id
+        self._next_state_id += 1
+        return state_id
+    
+    def epsilon_closure(self, states: Set[NFAState]) -> Set[NFAState]:
+        """
+        Compute epsilon closure of a set of states
+        
+        Args:
+            states: Set of NFA states
+            
+        Returns:
+            Set of states reachable via epsilon transitions
+        """
+        closure = set(states)
+        stack = list(states)
+        
+        while stack:
+            state = stack.pop()
+            for eps_state in state.epsilon_transitions:
+                if eps_state not in closure:
+                    closure.add(eps_state)
+                    stack.append(eps_state)
+        
+        return closure
+    
+    def move(self, states: Set[NFAState], symbol: str) -> Set[NFAState]:
+        """
+        Compute move on a symbol from a set of states
+        
+        Args:
+            states: Set of NFA states
+            symbol: Input symbol
+            
+        Returns:
+            Set of states reachable via symbol transitions
+        """
+        result = set()
+        for state in states:
+            if symbol in state.transitions:
+                result.update(state.transitions[symbol])
+        return result
+    
+    def display(self, title="NFA Diagram") -> graphviz.Digraph:
+        """
+        Visualize the NFA using Graphviz
+        
+        Args:
+            title: Title for the diagram
+            
+        Returns:
+            Graphviz Digraph object
+        """
+        dot = graphviz.Digraph(comment=title)
+        dot.attr(rankdir='LR', size='8,5')
+        
+        # Add states
+        for state in self.states:
+            if state == self.start_state:
+                if state in self.accept_states:
+                    dot.node(str(state.id), shape='doublecircle', style='bold', color='green')
+                else:
+                    dot.node(str(state.id), shape='circle', style='bold', color='blue')
+            elif state in self.accept_states:
+                dot.node(str(state.id), shape='doublecircle', style='bold', color='red')
+            else:
+                dot.node(str(state.id), shape='circle')
+        
+        # Add transitions
+        for state in self.states:
+            # Add symbol transitions
+            for symbol, dest_states in state.transitions.items():
+                for dest in dest_states:
+                    dot.edge(str(state.id), str(dest.id), label=symbol)
+            
+            # Add epsilon transitions
+            for eps_state in state.epsilon_transitions:
+                dot.edge(str(state.id), str(eps_state.id), label='ε', style='dashed')
+        
+        # Mark start state with arrow
+        dot.node('start', shape='point')
+        dot.edge('start', str(self.start_state.id))
+        
+        return dot
+    
+    def to_dict(self) -> dict:
+        """Convert NFA to dictionary for serialization"""
+        state_mapping = {state: i for i, state in enumerate(self.states)}
+        
+        nfa_dict = {
+            'states': len(self.states),
+            'alphabet': list(self.alphabet),
+            'start_state': state_mapping[self.start_state],
+            'accept_states': [state_mapping[s] for s in self.accept_states],
+            'transitions': []
+        }
+        
+        for state in self.states:
+            for symbol, dest_states in state.transitions.items():
+                for dest in dest_states:
+                    nfa_dict['transitions'].append({
+                        'from': state_mapping[state],
+                        'to': state_mapping[dest],
+                        'symbol': symbol
+                    })
+            
+            for eps_state in state.epsilon_transitions:
+                nfa_dict['transitions'].append({
+                    'from': state_mapping[state],
+                    'to': state_mapping[eps_state],
+                    'symbol': 'ε'
+                })
+        
+        return nfa_dict
+    
+    def simulate(self, input_string: str) -> bool:
+        """
+        Simulate NFA on input string
+        
+        Args:
+            input_string: String to test
+            
+        Returns:
+            True if string is accepted, False otherwise
+        """
+        current_states = self.epsilon_closure({self.start_state})
+        
+        for symbol in input_string:
+            if symbol not in self.alphabet:
+                return False
+            
+            next_states = self.move(current_states, symbol)
+            current_states = self.epsilon_closure(next_states)
+            
+            if not current_states:
+                return False
+        
+        # Check if any accepting state is reachable
+        return any(state in self.accept_states for state in current_states)
 
-## 📊 Learning Assessment
 
-| Assessment Type | Weightage | Description |
-|-----------------|-----------|-------------|
-| Lab Implementation | 40% | Code quality and functionality |
-| Viva Voce | 20% | Conceptual understanding |
-| Lab Record | 20% | Documentation and observations |
-| Internal Assessment | 20% | Regular performance |
+# ==============================================================================
+# REGULAR EXPRESSION PARSER
+# ==============================================================================
 
-## 🚀 Getting Started
+class RegexParser:
+    """
+    Parses regular expressions into abstract syntax tree
+    
+    Grammar:
+        regex    ::= term ('|' term)*
+        term     ::= factor*
+        factor   ::= atom ('*' | '+' | '?')?
+        atom     ::= char | '(' regex ')'
+    """
+    
+    def __init__(self, pattern: str):
+        self.pattern = pattern
+        self.position = 0
+        self.tokens = []
+        self._tokenize()
+    
+    def _tokenize(self):
+        """Convert regex string to tokens"""
+        i = 0
+        while i < len(self.pattern):
+            char = self.pattern[i]
+            
+            if char == '\\':
+                # Escape sequence
+                if i + 1 < len(self.pattern):
+                    self.tokens.append(('CHAR', self.pattern[i + 1]))
+                    i += 2
+                else:
+                    raise ValueError("Invalid escape sequence at end of pattern")
+            elif char in '()|*+?':
+                self.tokens.append(('OPERATOR', char))
+                i += 1
+            elif char.isspace():
+                # Skip whitespace
+                i += 1
+            else:
+                self.tokens.append(('CHAR', char))
+                i += 1
+    
+    def parse(self):
+        """Parse the regular expression"""
+        self.position = 0
+        return self._parse_regex()
+    
+    def _parse_regex(self):
+        """Parse a regex (handles union)"""
+        terms = [self._parse_term()]
+        
+        while self.position < len(self.tokens) and self.tokens[self.position][1] == '|':
+            self.position += 1  # consume '|'
+            terms.append(self._parse_term())
+        
+        if len(terms) == 1:
+            return terms[0]
+        return ('UNION', terms)
+    
+    def _parse_term(self):
+        """Parse a term (handles concatenation)"""
+        factors = []
+        
+        while (self.position < len(self.tokens) and 
+               self.tokens[self.position][1] not in '|)'):
+            factors.append(self._parse_factor())
+        
+        if len(factors) == 1:
+            return factors[0]
+        return ('CONCAT', factors)
+    
+    def _parse_factor(self):
+        """Parse a factor (handles Kleene star, plus, optional)"""
+        atom = self._parse_atom()
+        
+        if self.position < len(self.tokens):
+            token_type, token_value = self.tokens[self.position]
+            if token_type == 'OPERATOR' and token_value in '*+?':
+                self.position += 1
+                if token_value == '*':
+                    return ('STAR', atom)
+                elif token_value == '+':
+                    return ('PLUS', atom)
+                elif token_value == '?':
+                    return ('OPTIONAL', atom)
+        
+        return atom
+    
+    def _parse_atom(self):
+        """Parse an atom (character or parenthesized expression)"""
+        if self.position >= len(self.tokens):
+            raise ValueError("Unexpected end of pattern")
+        
+        token_type, token_value = self.tokens[self.position]
+        
+        if token_type == 'CHAR':
+            self.position += 1
+            return ('CHAR', token_value)
+        elif token_value == '(':
+            self.position += 1  # consume '('
+            expr = self._parse_regex()
+            
+            if (self.position >= len(self.tokens) or 
+                self.tokens[self.position][1] != ')'):
+                raise ValueError("Missing closing parenthesis")
+            
+            self.position += 1  # consume ')'
+            return expr
+        else:
+            raise ValueError(f"Unexpected token: {token_value}")
 
-### Prerequisites
-- Python 3.8+ or GCC compiler
-- Basic understanding of compiler phases
-- Familiarity with automata theory
 
-### Installation
-```bash
-# Clone the repository
-git clone https://github.com/yourusername/compiler-design-lab.git
+# ==============================================================================
+# THOMPSON'S CONSTRUCTION ALGORITHM
+# ==============================================================================
 
-# Navigate to project directory
-cd compiler-design-lab
+class ThompsonConstruction:
+    """
+    Implements Thompson's construction algorithm to convert regular expressions to NFA
+    
+    Basic constructions:
+        - ε: Empty string
+        - a: Single character
+        - r1|r2: Union
+        - r1r2: Concatenation
+        - r*: Kleene star
+        - r+: One or more repetitions
+        - r?: Optional (zero or one)
+    """
+    
+    def __init__(self):
+        self.nfa = NFA()
+    
+    def from_regex(self, regex: str) -> NFA:
+        """
+        Convert a regular expression to NFA using Thompson's construction
+        
+        Args:
+            regex: Regular expression string
+            
+        Returns:
+            NFA accepting the language described by the regex
+        """
+        # Parse the regular expression
+        parser = RegexParser(regex)
+        ast = parser.parse()
+        
+        # Build NFA from AST
+        start_state, accept_state = self._build_from_ast(ast)
+        
+        # Set start and accept states
+        self.nfa.start_state = start_state
+        self.nfa.add_accept_state(accept_state)
+        
+        # Collect all states
+        self._collect_states(start_state)
+        
+        return self.nfa
+    
+    def _build_from_ast(self, ast_node) -> Tuple[NFAState, NFAState]:
+        """
+        Recursively build NFA from AST node
+        
+        Returns:
+            Tuple of (start_state, accept_state) for the sub-NFA
+        """
+        if isinstance(ast_node, tuple):
+            node_type = ast_node[0]
+            
+            if node_type == 'CHAR':
+                # Single character: a
+                return self._build_char(ast_node[1])
+            
+            elif node_type == 'UNION':
+                # Union: r1|r2
+                return self._build_union(ast_node[1])
+            
+            elif node_type == 'CONCAT':
+                # Concatenation: r1r2
+                return self._build_concat(ast_node[1])
+            
+            elif node_type == 'STAR':
+                # Kleene star: r*
+                return self._build_star(ast_node[1])
+            
+            elif node_type == 'PLUS':
+                # One or more: r+
+                return self._build_plus(ast_node[1])
+            
+            elif node_type == 'OPTIONAL':
+                # Optional: r?
+                return self._build_optional(ast_node[1])
+        
+        return self._build_empty()
+    
+    def _build_char(self, char: str) -> Tuple[NFAState, NFAState]:
+        """Build NFA for a single character: a"""
+        start = NFAState(self.nfa.get_next_state_id(), {})
+        accept = NFAState(self.nfa.get_next_state_id(), {})
+        
+        self.nfa.add_transition(start, accept, char)
+        self.nfa.add_state(start)
+        self.nfa.add_state(accept)
+        
+        return start, accept
+    
+    def _build_empty(self) -> Tuple[NFAState, NFAState]:
+        """Build NFA for empty string: ε"""
+        start = NFAState(self.nfa.get_next_state_id(), {})
+        accept = NFAState(self.nfa.get_next_state_id(), {})
+        
+        self.nfa.add_transition(start, accept, 'ε')
+        self.nfa.add_state(start)
+        self.nfa.add_state(accept)
+        
+        return start, accept
+    
+    def _build_union(self, sub_expressions: list) -> Tuple[NFAState, NFAState]:
+        """
+        Build NFA for union: r1|r2
+        
+        Structure:
+                 ε → (NFA for r1) → ε
+        start →                     → accept
+                 ε → (NFA for r2) → ε
+        """
+        start = NFAState(self.nfa.get_next_state_id(), {})
+        accept = NFAState(self.nfa.get_next_state_id(), {})
+        
+        self.nfa.add_state(start)
+        self.nfa.add_state(accept)
+        
+        for expr in sub_expressions:
+            sub_start, sub_accept = self._build_from_ast(expr)
+            
+            # Connect start to sub-NFA start
+            self.nfa.add_transition(start, sub_start, 'ε')
+            
+            # Connect sub-NFA accept to final accept
+            self.nfa.add_transition(sub_accept, accept, 'ε')
+        
+        return start, accept
+    
+    def _build_concat(self, sub_expressions: list) -> Tuple[NFAState, NFAState]:
+        """
+        Build NFA for concatenation: r1r2
+        
+        Structure:
+        start → (NFA for r1) → (NFA for r2) → accept
+        """
+        if not sub_expressions:
+            return self._build_empty()
+        
+        # Build first sub-expression
+        start, current_accept = self._build_from_ast(sub_expressions[0])
+        
+        # Chain remaining sub-expressions
+        for expr in sub_expressions[1:]:
+            next_start, next_accept = self._build_from_ast(expr)
+            
+            # Connect current accept to next start via epsilon
+            self.nfa.add_transition(current_accept, next_start, 'ε')
+            
+            # Update current accept
+            current_accept = next_accept
+        
+        return start, current_accept
+    
+    def _build_star(self, sub_expression) -> Tuple[NFAState, NFAState]:
+        """
+        Build NFA for Kleene star: r*
+        
+        Structure:
+            ┌───────────────┐
+            ↓               │
+        start → (NFA for r) → accept
+          │                   ↑
+          └──────── ε ────────┘
+        """
+        start = NFAState(self.nfa.get_next_state_id(), {})
+        accept = NFAState(self.nfa.get_next_state_id(), {})
+        
+        self.nfa.add_state(start)
+        self.nfa.add_state(accept)
+        
+        # Build sub-NFA
+        sub_start, sub_accept = self._build_from_ast(sub_expression)
+        
+        # Add transitions
+        self.nfa.add_transition(start, sub_start, 'ε')
+        self.nfa.add_transition(start, accept, 'ε')
+        self.nfa.add_transition(sub_accept, sub_start, 'ε')
+        self.nfa.add_transition(sub_accept, accept, 'ε')
+        
+        return start, accept
+    
+    def _build_plus(self, sub_expression) -> Tuple[NFAState, NFAState]:
+        """
+        Build NFA for one or more: r+
+        
+        Structure: r·r*
+        """
+        # r+ = r·r*
+        star_start, star_accept = self._build_star(sub_expression)
+        
+        # Create concatenation: r (the first occurrence)
+        sub_start, sub_accept = self._build_from_ast(sub_expression)
+        
+        # Connect sub_accept to star_start
+        self.nfa.add_transition(sub_accept, star_start, 'ε')
+        
+        return sub_start, star_accept
+    
+    def _build_optional(self, sub_expression) -> Tuple[NFAState, NFAState]:
+        """
+        Build NFA for optional: r?
+        
+        Structure: ε|r
+        """
+        start = NFAState(self.nfa.get_next_state_id(), {})
+        accept = NFAState(self.nfa.get_next_state_id(), {})
+        
+        self.nfa.add_state(start)
+        self.nfa.add_state(accept)
+        
+        # Build sub-NFA
+        sub_start, sub_accept = self._build_from_ast(sub_expression)
+        
+        # Add transitions
+        self.nfa.add_transition(start, accept, 'ε')
+        self.nfa.add_transition(start, sub_start, 'ε')
+        self.nfa.add_transition(sub_accept, accept, 'ε')
+        
+        return start, accept
+    
+    def _collect_states(self, state: NFAState, visited: Set[NFAState] = None):
+        """Collect all states reachable from start state"""
+        if visited is None:
+            visited = set()
+        
+        if state in visited:
+            return
+        
+        visited.add(state)
+        self.nfa.states.add(state)
+        
+        # Collect from symbol transitions
+        for dest_states in state.transitions.values():
+            for dest in dest_states:
+                self._collect_states(dest, visited)
+        
+        # Collect from epsilon transitions
+        for dest in state.epsilon_transitions:
+            self._collect_states(dest, visited)
 
-# Install required packages (if using Python)
-pip install -r requirements.txt
+
+# ==============================================================================
+# REGULAR EXPRESSION TO NFA CONVERTER (MAIN CLASS)
+# ==============================================================================
+
+class RegexToNFA:
+    """
+    Main class for converting regular expressions to NFA
+    
+    Features:
+        - Thompson's construction algorithm
+        - Visualization using Graphviz
+        - NFA simulation
+        - Export/import functionality
+        - Support for common regex operators: |, *, +, ?, ()
+    """
+    
+    def __init__(self):
+        self.thompson = ThompsonConstruction()
+        self.nfa = None
+        self.regex = None
+    
+    def convert(self, regex: str) -> NFA:
+        """
+        Convert a regular expression to NFA
+        
+        Args:
+            regex: Regular expression string
+            
+        Returns:
+            NFA object
+        """
+        self.regex = regex
+        self.nfa = self.thompson.from_regex(regex)
+        return self.nfa
+    
+    def visualize(self, filename="nfa_diagram", format="png"):
+        """
+        Visualize the NFA and save to file
+        
+        Args:
+            filename: Output filename (without extension)
+            format: Output format (png, pdf, svg)
+        """
+        if not self.nfa:
+            raise ValueError("No NFA to visualize. Call convert() first.")
+        
+        dot = self.nfa.display(f"NFA for: {self.regex}")
+        dot.render(filename, format=format, cleanup=True)
+        print(f"✅ NFA diagram saved to {filename}.{format}")
+        
+        return dot
+    
+    def test_string(self, input_string: str) -> bool:
+        """
+        Test if a string is accepted by the NFA
+        
+        Args:
+            input_string: String to test
+            
+        Returns:
+            True if accepted, False otherwise
+        """
+        if not self.nfa:
+            raise ValueError("No NFA to test. Call convert() first.")
+        
+        result = self.nfa.simulate(input_string)
+        
+        print(f"\nTesting string: '{input_string}'")
+        print(f"Result: {'✅ ACCEPTED' if result else '❌ REJECTED'}")
+        
+        return result
+    
+    def test_multiple(self, test_strings: List[str]):
+        """Test multiple strings"""
+        print(f"\n{'='*50}")
+        print(f"Testing multiple strings on NFA for: '{self.regex}'")
+        print(f"{'='*50}")
+        
+        results = {}
+        for s in test_strings:
+            results[s] = self.test_string(s)
+        
+        return results
+    
+    def export_nfa(self, filename: str):
+        """Export NFA to JSON file"""
+        if not self.nfa:
+            raise ValueError("No NFA to export")
+        
+        data = {
+            'regex': self.regex,
+            'nfa': self.nfa.to_dict()
+        }
+        
+        with open(filename, 'w') as f:
+            json.dump(data, f, indent=2)
+        
+        print(f"✅ NFA exported to {filename}")
+    
+    def print_transition_table(self):
+        """Print the NFA transition table"""
+        if not self.nfa:
+            raise ValueError("No NFA available")
+        
+        print(f"\n{'='*60}")
+        print(f"TRANSITION TABLE FOR NFA: '{self.regex}'")
+        print(f"{'='*60}")
+        
+        # Get all symbols (including epsilon)
+        symbols = sorted(list(self.nfa.alphabet)) + ['ε']
+        
+        # Create mapping for state IDs
+        state_list = sorted(list(self.nfa.states), key=lambda s: s.id)
+        state_ids = {s: s.id for s in state_list}
+        
+        # Print header
+        header = "State\t| " + "\t| ".join(symbols) + "\t| Accepting?"
+        print(header)
+        print("-" * len(header.expandtabs()))
+        
+        # Print each state's transitions
+        for state in state_list:
+            row = f"{state.id}\t| "
+            
+            for symbol in symbols:
+                if symbol == 'ε':
+                    dest = state.epsilon_transitions
+                else:
+                    dest = state.transitions.get(symbol, set())
+                
+                if dest:
+                    dest_ids = sorted([s.id for s in dest])
+                    row += f"{{{','.join(map(str, dest_ids))}}}\t| "
+                else:
+                    row += "-\t| "
+            
+            row += "Yes" if state.is_accept else "No"
+            print(row)
+        
+        print(f"\nStart State: {self.nfa.start_state.id}")
+        print(f"Accept States: {sorted([s.id for s in self.nfa.accept_states])}")
+
+
+# ==============================================================================
+# TEST CASES AND EXAMPLES
+# ==============================================================================
+
+class TestRegexToNFA:
+    """Test cases for Regex to NFA conversion"""
+    
+    @staticmethod
+    def run_all_tests():
+        """Run all test cases"""
+        print("\n" + "="*70)
+        print("TESTING REGULAR EXPRESSION TO NFA CONVERSION")
+        print("="*70)
+        
+        converter = RegexToNFA()
+        
+        # Test case 1: Single character
+        print("\n📌 TEST 1: Single character 'a'")
+        nfa1 = converter.convert("a")
+        converter.print_transition_table()
+        converter.test_multiple(["", "a", "aa", "b"])
+        converter.visualize("nfa_test_1_single_char")
+        
+        # Test case 2: Union (a|b)
+        print("\n" + "="*70)
+        print("📌 TEST 2: Union 'a|b'")
+        nfa2 = converter.convert("a|b")
+        converter.print_transition_table()
+        converter.test_multiple(["", "a", "b", "ab", "ba", "c"])
+        converter.visualize("nfa_test_2_union")
+        
+        # Test case 3: Concatenation 'ab'
+        print("\n" + "="*70)
+        print("📌 TEST 3: Concatenation 'ab'")
+        nfa3 = converter.convert("ab")
+        converter.print_transition_table()
+        converter.test_multiple(["", "a", "b", "ab", "aba", "bab"])
+        converter.visualize("nfa_test_3_concat")
+        
+        # Test case 4: Kleene star 'a*'
+        print("\n" + "="*70)
+        print("📌 TEST 4: Kleene star 'a*'")
+        nfa4 = converter.convert("a*")
+        converter.print_transition_table()
+        converter.test_multiple(["", "a", "aa", "aaa", "b", "ab"])
+        converter.visualize("nfa_test_4_star")
+        
+        # Test case 5: Plus 'a+'
+        print("\n" + "="*70)
+        print("📌 TEST 5: Plus 'a+'")
+        nfa5 = converter.convert("a+")
+        converter.print_transition_table()
+        converter.test_multiple(["", "a", "aa", "aaa", "b"])
+        converter.visualize("nfa_test_5_plus")
+        
+        # Test case 6: Optional 'a?'
+        print("\n" + "="*70)
+        print("📌 TEST 6: Optional 'a?'")
+        nfa6 = converter.convert("a?")
+        converter.print_transition_table()
+        converter.test_multiple(["", "a", "aa", "b"])
+        converter.visualize("nfa_test_6_optional")
+        
+        # Test case 7: Complex expression '(a|b)*abb'
+        print("\n" + "="*70)
+        print("📌 TEST 7: Complex '(a|b)*abb'")
+        nfa7 = converter.convert("(a|b)*abb")
+        converter.print_transition_table()
+        converter.test_multiple([
+            "abb", "aabb", "babb", "ababb", "bababb",
+            "ab", "abc", "aab", "bba"
+        ])
+        converter.visualize("nfa_test_7_complex")
+        
+        # Test case 8: Nested expression 'a(b|c)*d'
+        print("\n" + "="*70)
+        print("📌 TEST 8: Nested 'a(b|c)*d'")
+        nfa8 = converter.convert("a(b|c)*d")
+        converter.print_transition_table()
+        converter.test_multiple([
+            "ad", "abd", "acd", "abcd", "acbd",
+            "a", "d", "ab", "ac"
+        ])
+        converter.visualize("nfa_test_8_nested")
+        
+        print("\n" + "="*70)
+        print("✅ ALL TESTS COMPLETED")
+        print("="*70)
+
+
+# ==============================================================================
+# INTERACTIVE MODE
+# ==============================================================================
+
+class InteractiveMode:
+    """Interactive mode for Regex to NFA conversion"""
+    
+    def __init__(self):
+        self.converter = RegexToNFA()
+        self.history = []
+    
+    def run(self):
+        """Run interactive mode"""
+        print("\n" + "="*60)
+        print("REGULAR EXPRESSION TO NFA CONVERTER - INTERACTIVE MODE")
+        print("="*60)
+        print("\nSupported operators:")
+        print("  • '|'  - Union (a|b)")
+        print("  • '*'  - Kleene star (a*)")
+        print("  • '+'  - One or more (a+)")
+        print("  • '?'  - Optional (a?)")
+        print("  • '()' - Grouping")
+        print("\nCommands:")
+        print("  • 'quit' or 'exit' - Exit program")
+        print("  • 'history' - Show conversion history")
+        print("  • 'clear' - Clear history")
+        print("  • 'test <string>' - Test a string on last NFA")
+        print("  • 'visualize' - Save diagram of last NFA")
+        print("="*60)
+        
+        while True:
+            try:
+                print()
+                regex = input("Enter regular expression: ").strip()
+                
+                if regex.lower() in ['quit', 'exit']:
+                    print("Goodbye!")
+                    break
+                
+                elif regex.lower() == 'history':
+                    self._show_history()
+                    continue
+                
+                elif regex.lower() == 'clear':
+                    self.history.clear()
+                    print("✅ History cleared")
+                    continue
+                
+                elif regex.startswith('test '):
+                    self._test_string(regex[5:].strip())
+                    continue
+                
+                elif regex.lower() == 'visualize':
+                    self._visualize_last()
+                    continue
+                
+                elif not regex:
+                    continue
+                
+                # Convert regex to NFA
+                print(f"\nConverting '{regex}' to NFA...")
+                nfa = self.converter.convert(regex)
+                
+                # Add to history
+                self.history.append({
+                    'regex': regex,
+                    'nfa': nfa,
+                    'states': len(nfa.states)
+                })
+                
+                # Show results
+                print(f"✅ Conversion successful!")
+                print(f"   • Number of states: {len(nfa.states)}")
+                print(f"   • Alphabet: {sorted(list(nfa.alphabet))}")
+                print(f"   • Start state: {nfa.start_state.id}")
+                print(f"   • Accept states: {[s.id for s in nfa.accept_states]}")
+                
+                # Show transition table
+                self.converter.print_transition_table()
+                
+                # Ask for visualization
+                vis = input("\nGenerate visualization? (y/n): ").strip().lower()
+                if vis == 'y':
+                    filename = input("Enter filename (default: nfa_diagram): ").strip()
+                    if not filename:
+                        filename = "nfa_diagram"
+                    self.converter.visualize(filename)
+                
+                # Ask for testing
+                test = input("\nTest strings? (y/n): ").strip().lower()
+                if test == 'y':
+                    self._interactive_testing()
+                
+            except KeyboardInterrupt:
+                print("\n\nExiting...")
+                break
+            except Exception as e:
+                print(f"❌ Error: {e}")
+    
+    def _show_history(self):
+        """Show conversion history"""
+        if not self.history:
+            print("No history available")
+            return
+        
+        print("\nConversion History:")
+        print("-" * 40)
+        for i, item in enumerate(self.history, 1):
+            print(f"{i}. {item['regex']} - {item['states']} states")
+    
+    def _test_string(self, test_str):
+        """Test a string on the last NFA"""
+        if not self.history:
+            print("No NFA available. Convert a regex first.")
+            return
+        
+        self.converter.nfa = self.history[-1]['nfa']
+        self.converter.regex = self.history[-1]['regex']
+        self.converter.test_string(test_str)
+    
+    def _visualize_last(self):
+        """Visualize the last NFA"""
+        if not self.history:
+            print("No NFA available. Convert a regex first.")
+            return
+        
+        self.converter.nfa = self.history[-1]['nfa']
+        self.converter.regex = self.history[-1]['regex']
+        
+        filename = input("Enter filename (default: nfa_diagram): ").strip()
+        if not filename:
+            filename = "nfa_diagram"
+        
+        self.converter.visualize(filename)
+    
+    def _interactive_testing(self):
+        """Interactive string testing"""
+        print("\nEnter strings to test (one per line, empty line to finish):")
+        
+        while True:
+            test_str = input("  > ").strip()
+            if not test_str:
+                break
+            
+            self.converter.test_string(test_str)
+
+
+# ==============================================================================
+# BATCH PROCESSING MODE
+# ==============================================================================
+
+class BatchMode:
+    """Batch processing mode for Regex to NFA conversion"""
+    
+    def __init__(self, input_file: str, output_file: str = None):
+        self.input_file = input_file
+        self.output_file = output_file
+        self.converter = RegexToNFA()
+        self.results = []
+    
+    def process(self):
+        """Process regular expressions from input file"""
+        try:
+            with open(self.input_file, 'r') as f:
+                regexes = [line.strip() for line in f if line.strip() and not line.startswith('#')]
+            
+            print(f"\nProcessing {len(regexes)} regular expressions from {self.input_file}")
+            
+            for i, regex in enumerate(regexes, 1):
+                print(f"\n[{i}/{len(regexes)}] Converting: '{regex}'")
+                
+                try:
+                    nfa = self.converter.convert(regex)
+                    
+                    result = {
+                        'regex': regex,
+                        'success': True,
+                        'states': len(nfa.states),
+                        'alphabet': sorted(list(nfa.alphabet)),
+                        'start_state': nfa.start_state.id,
+                        'accept_states': [s.id for s in nfa.accept_states]
+                    }
+                    
+                    print(f"  ✅ Success - {len(nfa.states)} states")
+                    
+                except Exception as e:
+                    result = {
+                        'regex': regex,
+                        'success': False,
+                        'error': str(e)
+                    }
+                    
+                    print(f"  ❌ Failed - {e}")
+                
+                self.results.append(result)
+            
+            self._save_results()
+            
+        except FileNotFoundError:
+            print(f"❌ Input file not found: {self.input_file}")
+        except Exception as e:
+            print(f"❌ Error during batch processing: {e}")
+    
+    def _save_results(self):
+        """Save results to output file"""
+        if not self.output_file:
+            return
+        
+        try:
+            with open(self.output_file, 'w') as f:
+                f.write("REGEX TO NFA CONVERSION RESULTS\n")
+                f.write("=" * 50 + "\n\n")
+                
+                successful = [r for r in self.results if r['success']]
+                failed = [r for r in self.results if not r['success']]
+                
+                f.write(f"Total: {len(self.results)}\n")
+                f.write(f"Successful: {len(successful)}\n")
+                f.write(f"Failed: {len(failed)}\n\n")
+                
+                if successful:
+                    f.write("SUCCESSFUL CONVERSIONS:\n")
+                    f.write("-" * 30 + "\n")
+                    for r in successful:
+                        f.write(f"\nRegex: {r['regex']}\n")
+                        f.write(f"  States: {r['states']}\n")
+                        f.write(f"  Alphabet: {r['alphabet']}\n")
+                        f.write(f"  Start State: {r['start_state']}\n")
+                        f.write(f"  Accept States: {r['accept_states']}\n")
+                
+                if failed:
+                    f.write("\nFAILED CONVERSIONS:\n")
+                    f.write("-" * 30 + "\n")
+                    for r in failed:
+                        f.write(f"\n
